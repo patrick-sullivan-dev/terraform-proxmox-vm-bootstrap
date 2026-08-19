@@ -110,6 +110,18 @@ resource "proxmox_virtual_environment_vm" "this" {
     }
   }
 
+  dynamic "clone" {
+    for_each = local.using_clone ? [var.clone] : []
+
+    content {
+      datastore_id = clone.value.datastore_id
+      full         = clone.value.full
+      node_name    = clone.value.node_name
+      retries      = clone.value.retries
+      vm_id        = clone.value.vm_id
+    }
+  }
+
   cpu {
     affinity     = var.cpu.affinity
     architecture = var.cpu.architecture
@@ -124,7 +136,7 @@ resource "proxmox_virtual_environment_vm" "this" {
   }
 
   dynamic "disk" {
-    for_each = local.disks
+    for_each = local.using_clone ? [] : local.disks
 
     content {
       aio               = disk.value.aio
@@ -162,7 +174,7 @@ resource "proxmox_virtual_environment_vm" "this" {
   }
 
   dynamic "efi_disk" {
-    for_each = var.system.bios == "ovmf" ? [var.system.efi_disk] : []
+    for_each = !local.using_clone && var.system.bios == "ovmf" ? [var.system.efi_disk] : []
 
     content {
       datastore_id      = efi_disk.value.datastore_id
@@ -281,7 +293,7 @@ resource "proxmox_virtual_environment_vm" "this" {
   }
 
   dynamic "tpm_state" {
-    for_each = var.system.tpm_state == null ? [] : [var.system.tpm_state]
+    for_each = !local.using_clone && var.system.tpm_state != null ? [var.system.tpm_state] : []
 
     content {
       datastore_id = tpm_state.value.datastore_id
@@ -333,15 +345,32 @@ resource "proxmox_virtual_environment_vm" "this" {
 
   lifecycle {
     precondition {
-      condition = length([
-        for value in [
-          local.boot_disk.file_id,
-          local.boot_disk.import_from,
-          local.boot_disk.path_in_datastore,
-        ] : value if value != null
-      ]) == 1
+      condition = !local.using_cloud_image || (
+        local.boot_disk != null &&
+        length(local.boot_disk_sources) == 1
+      )
 
       error_message = "Configure the first disk with exactly one of file_id, import_from, or path_in_datastore, either directly or through cloud_image."
+    }
+
+    precondition {
+      condition     = !local.using_clone || length(var.disks) == 0
+      error_message = "disks must be empty when clone is configured; cloned disks are inherited from the source VM."
+    }
+
+    precondition {
+      condition     = !local.using_clone || local.cloud_image_source_count == 0
+      error_message = "cloud_image must not be configured when clone is configured."
+    }
+
+    precondition {
+      condition     = local.using_clone ? var.clone.vm_id != var.vm_id : true
+      error_message = "clone.vm_id must differ from the target vm_id."
+    }
+
+    precondition {
+      condition     = !local.using_clone || var.system.tpm_state == null
+      error_message = "system.tpm_state cannot be configured in clone mode; TPM state is inherited from the source VM."
     }
 
     precondition {
@@ -361,6 +390,9 @@ resource "macaddress" "this" {
 }
 
 locals {
+  using_clone       = var.clone != null
+  using_cloud_image = var.clone == null
+
   network_devices = [
     for index, network_device in var.network_devices : merge(network_device, {
       mac_address = coalesce(
@@ -390,7 +422,22 @@ locals {
     })
   ]
 
-  boot_disk = local.disks[0]
+  boot_disk = try(local.disks[0], null)
+
+  boot_disk_sources = [
+    for value in [
+      try(local.boot_disk.file_id, null),
+      try(local.boot_disk.import_from, null),
+      try(local.boot_disk.path_in_datastore, null),
+    ] : value if value != null
+  ]
+
+  cloud_image_source_count = length([
+    for value in [
+      var.cloud_image.file_id,
+      var.cloud_image.import_from,
+    ] : value if value != null
+  ])
 }
 
 resource "local_file" "rendered_network_config_debug" {

@@ -155,15 +155,11 @@ variable "disks" {
   }))
 
   validation {
-    condition     = length(var.disks) > 0
-    error_message = "At least one disk must be configured."
-  }
-
-  validation {
     condition     = alltrue([for disk in var.disks : contains(["scsi", "sata", "virtio"], disk.interface)])
     error_message = "Interface must be one of scsi, sata, virtio. Do not append index."
   }
 
+  default  = []
   nullable = false
 }
 
@@ -209,6 +205,21 @@ variable "cloud_image" {
 
   default  = {}
   nullable = false
+}
+
+variable "clone" {
+  description = "Configuration for cloning an existing VM or template"
+
+  type = object({
+    vm_id        = number
+    node_name    = optional(string)
+    datastore_id = optional(string)
+    full         = optional(bool, true)
+    retries      = optional(number)
+  })
+
+  default  = null
+  nullable = true
 }
 
 variable "scsi_hardware" {
