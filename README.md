@@ -3,7 +3,7 @@
 [![Terraform Quality](https://github.com/patrick-sullivan-dev/proxmox-cloudinit-vm/actions/workflows/_tf-lint.yml/badge.svg)](https://github.com/patrick-sullivan-dev/proxmox-cloudinit-vm/actions/workflows/_tf-lint.yml)
 [![Documentation](https://github.com/patrick-sullivan-dev/proxmox-cloudinit-vm/actions/workflows/documentation.yml/badge.svg)](https://github.com/patrick-sullivan-dev/proxmox-cloudinit-vm/actions/workflows/documentation.yml)
 
-A Terraform module for bootstrapping Proxmox VE virtual machines from cloud images. Cloud-init configuration is rendered from module variables. 
+A Terraform module for bootstrapping Proxmox VE virtual machines from cloud images or existing VMs and templates. Cloud-init configuration is rendered from module variables.
 
 The goal is to end up with a fully bootstrapped VM thats ready for provisioning by some other tool like Ansible. No need to manage Cloud-init configuration separately.
 
@@ -16,6 +16,7 @@ The goal is to end up with a fully bootstrapped VM thats ready for provisioning 
 - IPv4 and IPv6 routes, DNS servers, and DNS search domains.
 - Multiple network interfaces with indiviual configuration and provided or generated MAC addresses.
 - Automatic installation and startup of the QEMU guest agent.
+- Full or linked cloning from an existing VM or template.
 - All bgp/proxmox provider variables are exposed.
 
 Defaults are opinionated for a modern Linux guest: Q35, OVMF/UEFI, two CPU cores, 2GB of memory, 25GB disk space, DHCPv4, VirtIO networking on `vmbr0`, and an enabled QEMU guest agent.
@@ -166,6 +167,48 @@ cloud_image = {
 
 You can place `file_id`, `import_from`, or `path_in_datastore` directly on the first `disks` entry instead. The module rejects a configuration unless exactly one of those values resolves for the boot disk. `import_from` is preferred for uncompressed cloud images; consult the provider's [cloud-image guide](https://registry.terraform.io/providers/bpg/proxmox/latest/docs/guides/cloud-image) for compressed images.
 
+### Clone a VM or template
+
+Set `clone.vm_id` to the source VM or template ID and omit `disks` and
+`cloud_image`:
+
+```hcl
+module "vm" {
+  source = "git::https://github.com/patrick-sullivan-dev/proxmox-cloudinit-vm.git"
+
+  vm_id     = 201
+  name      = "ubuntu-clone"
+  node_name = "pve-b"
+
+  clone = {
+    vm_id        = 9000
+    node_name    = "pve-a"
+    datastore_id = "local-lvm"
+    full         = true
+  }
+
+  cloud_init = {
+    hostname = "ubuntu-clone"
+  }
+}
+```
+
+The source and target VM IDs must differ. `full` defaults to `true`; set it to
+`false` only when the source and storage support linked clones. The source must
+support Cloud-Init because the module continues to attach its generated
+Cloud-Init snippets.
+
+Clone mode leaves inherited disk, EFI, and TPM devices alone, so `disks` and
+`cloud_image` must remain empty and `system.tpm_state` must remain null.
+`system.efi_disk` is ignored. CPU, memory, network, machine, and other ordinary
+VM settings can override the source, but `system.bios` and `system.machine`
+must remain compatible with it. See [`examples/clone`](examples/clone) for a
+complete configuration.
+
+The no-credentials Terraform tests cover clone wiring and conflicts. Full,
+linked, and cross-node cloning have not yet been exercised against a live
+Proxmox environment by this repository.
+
 ### Configure a static address
 
 Addresses use CIDR notation. `default_route` is a single next-hop address without a CIDR prefix, aka your routers address. 
@@ -309,10 +352,11 @@ The rendered user data always enables package updates and upgrades and installs 
 
 | Area | Behavior |
 | --- | --- |
-| Boot disk | `disks` must contain at least one entry. Interfaces are supplied without an index (`scsi`, `sata`, or `virtio`); the module assigns indexes in list order. |
-| Cloud image | Exactly one of `file_id`, `import_from`, or `path_in_datastore` must resolve on the first disk, either supply directly to the first disk or use the cloud_image variable |
+| Boot disk | Image mode requires at least one `disks` entry. Interfaces are supplied without an index (`scsi`, `sata`, or `virtio`); the module assigns indexes in list order. Clone mode requires `disks = []` and inherits source disks unchanged. |
+| Cloud image | In image mode, exactly one of `file_id`, `import_from`, or `path_in_datastore` must resolve on the first disk, either directly or through `cloud_image`. Clone mode requires an empty `cloud_image`. |
+| Cloning | `clone.vm_id` selects a different source VM or template. Full clones are the default. The module does not create disk, EFI, or TPM blocks in clone mode. |
 | Networking | The network-device and Cloud-init network lists must have equal lengths. Missing MAC addresses are generated with a locally administered prefix. Addresses and route destinations require CIDR notation; route gateways do not. |
-| Firmware | The default is Q35 with OVMF. An EFI disk is created automatically when `system.bios` is `ovmf`. |
+| Firmware | The default is Q35 with OVMF. In image mode, an EFI disk is created automatically when `system.bios` is `ovmf`. Clone mode inherits firmware storage devices; keep BIOS and machine settings compatible with the source. |
 | Guest agent | Enabled by default. Cloud-init installs and starts it; reported IP outputs may remain empty until first-boot provisioning finishes. |
 | Guest access | The default `ubuntu` user has no password or authorized key. Supply `authorized_keys`, `ssh_import_ids`, or a password hash before relying on guest access. |
 | Destruction | By default, unreferenced disks and backup configuration are purged. Review `delete_unreferenced_disks_on_destroy`, `purge_on_destroy`, `protection`, and `stop_on_destroy` for critical workloads. |
@@ -388,7 +432,6 @@ All module outputs are marked sensitive to reduce accidental display. `terraform
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
 | <a name="input_cloud_init"></a> [cloud\_init](#input\_cloud\_init) | Cloud-init configuration.<br/><br/>datastore\_id must allow the snippets content type. disk\_datastore\_id must<br/>allow VM disk images. user\_data and network\_data default to one entry each;<br/>network\_data must contain the same number of entries as network\_devices.<br/><br/>User passwords must be Cloud-init-compatible password hashes. Prefer<br/>authorized\_keys or ssh\_import\_ids instead. | <pre>object({<br/>    datastore_id        = optional(string, "local")<br/>    node_name           = optional(string)<br/>    disk_datastore_id   = optional(string, "local-lvm")<br/>    interface           = optional(string)<br/>    file_format         = optional(string)<br/>    vendor_data_file_id = optional(string)<br/>    meta_data_file_id   = optional(string)<br/><br/>    hostname = optional(string, null)<br/>    fqdn     = optional(string, null)<br/><br/>    user_data = optional(list(object({<br/>      username        = optional(string, "ubuntu")<br/>      password        = optional(string, null)<br/>      groups          = optional(list(string), ["sudo"])<br/>      shell           = optional(string, "/bin/bash")<br/>      sudoers         = optional(string, "ALL=(ALL) NOPASSWD:ALL")<br/>      ssh_import_ids  = optional(list(string), [])<br/>      authorized_keys = optional(list(string), [])<br/>    })), [{}])<br/><br/>    network_data = optional(list(object({<br/>      interface_name = optional(string, "eth0")<br/>      addresses      = optional(list(string), [])<br/>      dhcp4          = optional(bool, null)<br/>      dhcp6          = optional(bool, false)<br/>      default_route  = optional(string, null)<br/>      routes = optional(list(object({<br/>        to  = string<br/>        via = string<br/>      })), [])<br/>      dns_servers = optional(list(string), [])<br/>      dns_domains = optional(list(string), [])<br/>      mac_prefix  = optional(list(number), [2])<br/>    })), [{}])<br/><br/>    packages = optional(list(string), [])<br/>  })</pre> | n/a | yes |
-| <a name="input_disks"></a> [disks](#input\_disks) | Disk specifications.<br/><br/>Specify only the disk interface type: scsi, sata, or virtio.<br/>Do not include an index such as scsi0; indexes are assigned automatically.<br/><br/>The first disk is the boot disk. Its import\_from and file\_id values fall<br/>back to the matching cloud\_image value. Exactly one of file\_id,<br/>import\_from, or path\_in\_datastore must resolve for that disk.<br/><br/>At least one disk is required. Each entry defaults to the local-lvm<br/>datastore, scsi interface, and raw format; disk size is provider-defined<br/>when omitted. | <pre>list(object({<br/>    aio               = optional(string)<br/>    backup            = optional(bool)<br/>    cache             = optional(string)<br/>    datastore_id      = optional(string, "local-lvm")<br/>    discard           = optional(string)<br/>    file_format       = optional(string, "raw")<br/>    file_id           = optional(string)<br/>    import_from       = optional(string)<br/>    interface         = optional(string, "scsi")<br/>    iothread          = optional(bool)<br/>    path_in_datastore = optional(string)<br/>    queues            = optional(number)<br/>    replicate         = optional(bool)<br/>    serial            = optional(string)<br/>    size              = optional(number)<br/>    ssd               = optional(bool)<br/>    speed = optional(object({<br/>      iops_read            = optional(number)<br/>      iops_read_burstable  = optional(number)<br/>      iops_write           = optional(number)<br/>      iops_write_burstable = optional(number)<br/>      read                 = optional(number)<br/>      read_burstable       = optional(number)<br/>      write                = optional(number)<br/>      write_burstable      = optional(number)<br/>    }))<br/>  }))</pre> | n/a | yes |
 | <a name="input_name"></a> [name](#input\_name) | The name of the VM within Proxmox | `string` | n/a | yes |
 | <a name="input_node_name"></a> [node\_name](#input\_node\_name) | Proxmox node to create the VM on | `string` | n/a | yes |
 | <a name="input_vm_id"></a> [vm\_id](#input\_vm\_id) | The ID of the VM to be created | `number` | n/a | yes |
@@ -398,11 +441,13 @@ All module outputs are marked sensitive to reduce accidental display. `terraform
 | <a name="input_audio_device"></a> [audio\_device](#input\_audio\_device) | Audio device configuration | <pre>object({<br/>    device  = optional(string, "intel-hda")<br/>    driver  = optional(string, "spice")<br/>    enabled = optional(bool, true)<br/>  })</pre> | `null` | no |
 | <a name="input_boot_order"></a> [boot\_order](#input\_boot\_order) | Boot order configuration | `list(string)` | `null` | no |
 | <a name="input_cdrom"></a> [cdrom](#input\_cdrom) | CD-ROM configuration | <pre>object({<br/>    enabled   = optional(bool, false)<br/>    file_id   = optional(string, "none")<br/>    interface = optional(string, "ide3")<br/>  })</pre> | `null` | no |
-| <a name="input_cloud_image"></a> [cloud\_image](#input\_cloud\_image) | Cloud image used to initialize the VM.<br/><br/>Provide either import\_from or file\_id using a Proxmox file identifier.<br/><br/>This object may be omitted only when the first disks entry supplies its<br/>own image source. Use one of the following; prefer import\_from unless<br/>using an ISO or compressed image.<br/>import\_from: "<datastore\_id>:import/<file\_name>"<br/>file\_id: "<datastore\_id>:<content\_type>/<file\_name>"<br/><br/>A proxmox\_download\_file resource id can also be used instead. | <pre>object({<br/>    import_from = optional(string)<br/>    file_id     = optional(string)<br/>  })</pre> | `{}` | no |
+| <a name="input_clone"></a> [clone](#input\_clone) | Configuration for cloning an existing VM or template.<br/><br/>vm\_id identifies the source and must differ from the target VM ID. full<br/>defaults to true. Clone mode requires empty disks and cloud\_image values;<br/>inherited disk, EFI, and TPM devices are not managed by the module. | <pre>object({<br/>    vm_id        = number<br/>    node_name    = optional(string)<br/>    datastore_id = optional(string)<br/>    full         = optional(bool, true)<br/>    retries      = optional(number)<br/>  })</pre> | `null` | no |
+| <a name="input_cloud_image"></a> [cloud\_image](#input\_cloud\_image) | Cloud image used to initialize the VM.<br/><br/>Provide either import\_from or file\_id using a Proxmox file identifier.<br/><br/>This object may be omitted only when the first disks entry supplies its<br/>own image source. Use one of the following; prefer import\_from unless<br/>using an ISO or compressed image.<br/>import\_from: "<datastore\_id>:import/<file\_name>"<br/>file\_id: "<datastore\_id>:<content\_type>/<file\_name>"<br/><br/>A proxmox\_download\_file resource id can also be used instead.<br/><br/>Leave this object empty in clone mode. | <pre>object({<br/>    import_from = optional(string)<br/>    file_id     = optional(string)<br/>  })</pre> | `{}` | no |
 | <a name="input_cpu"></a> [cpu](#input\_cpu) | CPU configuration, defaults to 2 x86-64-v2-AES cores | <pre>object({<br/>    architecture = optional(string)<br/>    cores        = optional(number, 2)<br/>    flags        = optional(list(string))<br/>    hotplugged   = optional(number)<br/>    limit        = optional(number)<br/>    numa         = optional(bool)<br/>    sockets      = optional(number)<br/>    type         = optional(string, "x86-64-v2-AES")<br/>    units        = optional(number)<br/>    affinity     = optional(string)<br/>  })</pre> | `{}` | no |
 | <a name="input_debug_files"></a> [debug\_files](#input\_debug\_files) | Whether to output debug files (e.g., cloud-init user-data and network-data files) | `bool` | `false` | no |
 | <a name="input_delete_unreferenced_disks_on_destroy"></a> [delete\_unreferenced\_disks\_on\_destroy](#input\_delete\_unreferenced\_disks\_on\_destroy) | Whether to delete unreferenced disks when the VM is destroyed | `bool` | `true` | no |
 | <a name="input_description"></a> [description](#input\_description) | The description of the VM within Proxmox | `string` | `"Managed by Terraform"` | no |
+| <a name="input_disks"></a> [disks](#input\_disks) | Disk specifications.<br/><br/>Specify only the disk interface type: scsi, sata, or virtio.<br/>Do not include an index such as scsi0; indexes are assigned automatically.<br/><br/>In image mode, the first disk is the boot disk. Its import\_from and file\_id<br/>values fall back to the matching cloud\_image value. Exactly one of file\_id,<br/>import\_from, or path\_in\_datastore must resolve for that disk.<br/><br/>Image mode requires at least one disk; clone mode requires this list to be<br/>empty so inherited disks are not modified. Each entry defaults to the<br/>local-lvm datastore, scsi interface, and raw format; disk size is<br/>provider-defined when omitted. | <pre>list(object({<br/>    aio               = optional(string)<br/>    backup            = optional(bool)<br/>    cache             = optional(string)<br/>    datastore_id      = optional(string, "local-lvm")<br/>    discard           = optional(string)<br/>    file_format       = optional(string, "raw")<br/>    file_id           = optional(string)<br/>    import_from       = optional(string)<br/>    interface         = optional(string, "scsi")<br/>    iothread          = optional(bool)<br/>    path_in_datastore = optional(string)<br/>    queues            = optional(number)<br/>    replicate         = optional(bool)<br/>    serial            = optional(string)<br/>    size              = optional(number)<br/>    ssd               = optional(bool)<br/>    speed = optional(object({<br/>      iops_read            = optional(number)<br/>      iops_read_burstable  = optional(number)<br/>      iops_write           = optional(number)<br/>      iops_write_burstable = optional(number)<br/>      read                 = optional(number)<br/>      read_burstable       = optional(number)<br/>      write                = optional(number)<br/>      write_burstable      = optional(number)<br/>    }))<br/>  }))</pre> | `[]` | no |
 | <a name="input_hook_script_file_id"></a> [hook\_script\_file\_id](#input\_hook\_script\_file\_id) | Proxmox file ID for the hook script to be used with the VM | `string` | `null` | no |
 | <a name="input_hostpci"></a> [hostpci](#input\_hostpci) | Host PCI passthrough configuration | <pre>list(object({<br/>    device   = string<br/>    id       = optional(string)<br/>    mapping  = optional(string)<br/>    mdev     = optional(string)<br/>    pcie     = optional(bool)<br/>    rombar   = optional(bool)<br/>    rom_file = optional(string)<br/>    xvga     = optional(bool)<br/>  }))</pre> | `null` | no |
 | <a name="input_hotplug"></a> [hotplug](#input\_hotplug) | Hotplug configuration, accepts 0 to disable, 1 to enable all, or a comma-separated list of cpu, disk, memory, network, and usb | `string` | `null` | no |
@@ -425,7 +470,7 @@ All module outputs are marked sensitive to reduce accidental display. `terraform
 | <a name="input_started"></a> [started](#input\_started) | Whether to start the VM after creation | `bool` | `true` | no |
 | <a name="input_startup"></a> [startup](#input\_startup) | Startup configuration, time measured in seconds | <pre>object({<br/>    order      = optional(number)<br/>    up_delay   = optional(number)<br/>    down_delay = optional(number)<br/>  })</pre> | `null` | no |
 | <a name="input_stop_on_destroy"></a> [stop\_on\_destroy](#input\_stop\_on\_destroy) | Whether to stop rather than shutdown VM before destroy | `bool` | `false` | no |
-| <a name="input_system"></a> [system](#input\_system) | System configuration<br/><br/>EFI disk automatically created when bios is set to "ovmf". <br/>datastore\_id for EFI and TPM state default to local-lvm.<br/><br/>Defaults to q35 / ovmf / l26 with a 4m EFI disk and no TPM. | <pre>object({<br/>    machine = optional(string, "q35")<br/>    bios    = optional(string, "ovmf")<br/>    os_type = optional(string, "l26")<br/>    efi_disk = optional(object({<br/>      datastore_id      = optional(string)<br/>      file_format       = optional(string)<br/>      type              = optional(string, "4m")<br/>      pre_enrolled_keys = optional(bool)<br/>    }), {})<br/>    tpm_state = optional(object({<br/>      datastore_id = optional(string)<br/>      version      = optional(string)<br/>    }))<br/>  })</pre> | `{}` | no |
+| <a name="input_system"></a> [system](#input\_system) | System configuration<br/><br/>In image mode, an EFI disk is automatically created when bios is "ovmf";<br/>datastore\_id for EFI and TPM state defaults to local-lvm. Clone mode<br/>inherits those storage devices, ignores efi\_disk, and requires tpm\_state<br/>to remain null. Keep bios and machine compatible with the source VM.<br/><br/>Defaults to q35 / ovmf / l26 with a 4m EFI disk and no TPM. | <pre>object({<br/>    machine = optional(string, "q35")<br/>    bios    = optional(string, "ovmf")<br/>    os_type = optional(string, "l26")<br/>    efi_disk = optional(object({<br/>      datastore_id      = optional(string)<br/>      file_format       = optional(string)<br/>      type              = optional(string, "4m")<br/>      pre_enrolled_keys = optional(bool)<br/>    }), {})<br/>    tpm_state = optional(object({<br/>      datastore_id = optional(string)<br/>      version      = optional(string)<br/>    }))<br/>  })</pre> | `{}` | no |
 | <a name="input_tablet_device"></a> [tablet\_device](#input\_tablet\_device) | Whether to enable the USB tablet device | `bool` | `true` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | List of tags to add to the VM within Proxmox | `list(string)` | `[]` | no |
 | <a name="input_template"></a> [template](#input\_template) | Whether to convert the VM into a template | `bool` | `false` | no |
@@ -482,5 +527,5 @@ Issues and pull requests are welcome. Include any relavent information such as a
 
 ## Future work
 
-- Fully test/document cloning from a template instead of making a new VM from a cloud image
+- Run provider-backed smoke tests for full, linked, and cross-node cloning.
 - Come up with a better way to refer to disk images that doesnt take away any features (like ability to use compressed images) or make assumptions that could be wrong.

@@ -44,8 +44,10 @@ variable "system" {
   description = <<-EOT
     System configuration
 
-    EFI disk automatically created when bios is set to "ovmf". 
-    datastore_id for EFI and TPM state default to local-lvm.
+    In image mode, an EFI disk is automatically created when bios is "ovmf";
+    datastore_id for EFI and TPM state defaults to local-lvm. Clone mode
+    inherits those storage devices, ignores efi_disk, and requires tpm_state
+    to remain null. Keep bios and machine compatible with the source VM.
 
     Defaults to q35 / ovmf / l26 with a 4m EFI disk and no TPM.
   EOT
@@ -116,13 +118,14 @@ variable "disks" {
     Specify only the disk interface type: scsi, sata, or virtio.
     Do not include an index such as scsi0; indexes are assigned automatically.
 
-    The first disk is the boot disk. Its import_from and file_id values fall
-    back to the matching cloud_image value. Exactly one of file_id,
+    In image mode, the first disk is the boot disk. Its import_from and file_id
+    values fall back to the matching cloud_image value. Exactly one of file_id,
     import_from, or path_in_datastore must resolve for that disk.
 
-    At least one disk is required. Each entry defaults to the local-lvm
-    datastore, scsi interface, and raw format; disk size is provider-defined
-    when omitted.
+    Image mode requires at least one disk; clone mode requires this list to be
+    empty so inherited disks are not modified. Each entry defaults to the
+    local-lvm datastore, scsi interface, and raw format; disk size is
+    provider-defined when omitted.
   EOT
 
   type = list(object({
@@ -176,6 +179,8 @@ variable "cloud_image" {
     file_id: "<datastore_id>:<content_type>/<file_name>"
 
     A proxmox_download_file resource id can also be used instead.
+
+    Leave this object empty in clone mode.
   EOT
 
   type = object({
@@ -208,7 +213,13 @@ variable "cloud_image" {
 }
 
 variable "clone" {
-  description = "Configuration for cloning an existing VM or template"
+  description = <<-EOT
+    Configuration for cloning an existing VM or template.
+
+    vm_id identifies the source and must differ from the target VM ID. full
+    defaults to true. Clone mode requires empty disks and cloud_image values;
+    inherited disk, EFI, and TPM devices are not managed by the module.
+  EOT
 
   type = object({
     vm_id        = number
