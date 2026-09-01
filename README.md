@@ -13,7 +13,7 @@ The goal is to end up with a fully bootstrapped VM thats ready for provisioning 
 - Hostname and FQDN configuration.
 - Additional package installation, with package updates and upgrades during the initial boot.
 - DHCPv4, DHCPv6, or static addressing, including multiple addresses per interface.
-- Default routes, DNS servers, and DNS search domains.
+- IPv4 and IPv6 routes, DNS servers, and DNS search domains.
 - Multiple network interfaces with indiviual configuration and provided or generated MAC addresses.
 - Automatic installation and startup of the QEMU guest agent.
 - All bgp/proxmox provider variables are exposed.
@@ -168,7 +168,7 @@ You can place `file_id`, `import_from`, or `path_in_datastore` directly on the f
 
 ### Configure a static address
 
-Addresses use CIDR notation. `default_route` is the next-hop address, not a CIDR. Basically, just use your routers IP address. 
+Addresses use CIDR notation. `default_route` is a single next-hop address without a CIDR prefix, aka your routers address. 
 
 ```hcl
 cloud_init = {
@@ -191,6 +191,61 @@ cloud_init = {
 ```
 
 When `dhcp4` is omitted, the module enables DHCPv4 if `addresses` is empty and disables it if a static address is present.
+
+### Configure IPv6 or dual stack
+
+For DHCPv6-only networking, disable DHCPv4 and tell the guest-agent wait logic
+to wait for IPv6:
+
+```hcl
+agent = {
+  wait_for_ip = {
+    ipv6 = true
+  }
+}
+
+cloud_init = {
+  network_data = [{
+    dhcp4 = false
+    dhcp6 = true
+  }]
+}
+```
+
+Static IPv4 and IPv6 addresses can share an interface. Use `routes` when more
+than one default route is needed:
+
+```hcl
+agent = {
+  wait_for_ip = {
+    ipv4 = true
+    ipv6 = true
+  }
+}
+
+cloud_init = {
+  network_data = [{
+    interface_name = "eth0"
+    addresses = [
+      "192.0.2.20/24",
+      "2001:db8::20/64",
+    ]
+    dhcp4 = false
+    dhcp6 = false
+    routes = [
+      { to = "0.0.0.0/0", via = "192.0.2.1" },
+      { to = "::/0", via = "2001:db8::1" },
+    ]
+    dns_servers = ["192.0.2.53", "2001:db8::53"]
+  }]
+}
+```
+
+Route destinations use CIDR notation and `via` is a same-family gateway
+address without a prefix. `default_route` remains a shortcut when only one
+default route is required. If neither guest-agent address-family flag is set,
+the provider waits for any global IPv4 or IPv6 address; set one or both flags
+when a particular family must be available before apply completes.
 
 ### Configure multiple network interfaces
 
@@ -256,7 +311,7 @@ The rendered user data always enables package updates and upgrades and installs 
 | --- | --- |
 | Boot disk | `disks` must contain at least one entry. Interfaces are supplied without an index (`scsi`, `sata`, or `virtio`); the module assigns indexes in list order. |
 | Cloud image | Exactly one of `file_id`, `import_from`, or `path_in_datastore` must resolve on the first disk, either supply directly to the first disk or use the cloud_image variable |
-| Networking | The network-device and Cloud-init network lists must have equal lengths. Missing MAC addresses are generated with a locally administered prefix. |
+| Networking | The network-device and Cloud-init network lists must have equal lengths. Missing MAC addresses are generated with a locally administered prefix. Addresses and route destinations require CIDR notation; route gateways do not. |
 | Firmware | The default is Q35 with OVMF. An EFI disk is created automatically when `system.bios` is `ovmf`. |
 | Guest agent | Enabled by default. Cloud-init installs and starts it; reported IP outputs may remain empty until first-boot provisioning finishes. |
 | Guest access | The default `ubuntu` user has no password or authorized key. Supply `authorized_keys`, `ssh_import_ids`, or a password hash before relying on guest access. |
@@ -279,7 +334,7 @@ Enable **Snippets** on `cloud_init.datastore_id` and **Import** on the datastore
 
 ### The VM starts but has no reported IP address
 
-Wait for Cloud-init and the QEMU guest agent, confirm the image supports Cloud-init, and verify DHCP or the static route from the Proxmox console. Also check that each `network_data` entry corresponds to the same-position `network_devices` entry.
+Wait for Cloud-init and the QEMU guest agent, confirm the image supports Cloud-init, and verify DHCP or static routes from the Proxmox console. For IPv6, confirm that router advertisements or DHCPv6 are available when used and that `agent.wait_for_ip` requests the intended address family. Also check that each `network_data` entry corresponds to the same-position `network_devices` entry.
 
 ### Cloud-init did not apply a later change
 
@@ -332,7 +387,7 @@ All module outputs are marked sensitive to reduce accidental display. `terraform
 
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
-| <a name="input_cloud_init"></a> [cloud\_init](#input\_cloud\_init) | Cloud-init configuration.<br/><br/>datastore\_id must allow the snippets content type. disk\_datastore\_id must<br/>allow VM disk images. user\_data and network\_data default to one entry each;<br/>network\_data must contain the same number of entries as network\_devices.<br/><br/>User passwords must be Cloud-init-compatible password hashes. Prefer<br/>authorized\_keys or ssh\_import\_ids instead. | <pre>object({<br/>    datastore_id        = optional(string, "local")<br/>    node_name           = optional(string)<br/>    disk_datastore_id   = optional(string, "local-lvm")<br/>    interface           = optional(string)<br/>    file_format         = optional(string)<br/>    vendor_data_file_id = optional(string)<br/>    meta_data_file_id   = optional(string)<br/><br/>    hostname = optional(string, null)<br/>    fqdn     = optional(string, null)<br/><br/>    user_data = optional(list(object({<br/>      username        = optional(string, "ubuntu")<br/>      password        = optional(string, null)<br/>      groups          = optional(list(string), ["sudo"])<br/>      shell           = optional(string, "/bin/bash")<br/>      sudoers         = optional(string, "ALL=(ALL) NOPASSWD:ALL")<br/>      ssh_import_ids  = optional(list(string), [])<br/>      authorized_keys = optional(list(string), [])<br/>    })), [{}])<br/><br/>    network_data = optional(list(object({<br/>      interface_name = optional(string, "eth0")<br/>      addresses      = optional(list(string), [])<br/>      dhcp4          = optional(bool, null)<br/>      dhcp6          = optional(bool, false)<br/>      default_route  = optional(string, null)<br/>      dns_servers    = optional(list(string), [])<br/>      dns_domains    = optional(list(string), [])<br/>      mac_prefix     = optional(list(number), [2])<br/>    })), [{}])<br/><br/>    packages = optional(list(string), [])<br/>  })</pre> | n/a | yes |
+| <a name="input_cloud_init"></a> [cloud\_init](#input\_cloud\_init) | Cloud-init configuration.<br/><br/>datastore\_id must allow the snippets content type. disk\_datastore\_id must<br/>allow VM disk images. user\_data and network\_data default to one entry each;<br/>network\_data must contain the same number of entries as network\_devices.<br/><br/>User passwords must be Cloud-init-compatible password hashes. Prefer<br/>authorized\_keys or ssh\_import\_ids instead. | <pre>object({<br/>    datastore_id        = optional(string, "local")<br/>    node_name           = optional(string)<br/>    disk_datastore_id   = optional(string, "local-lvm")<br/>    interface           = optional(string)<br/>    file_format         = optional(string)<br/>    vendor_data_file_id = optional(string)<br/>    meta_data_file_id   = optional(string)<br/><br/>    hostname = optional(string, null)<br/>    fqdn     = optional(string, null)<br/><br/>    user_data = optional(list(object({<br/>      username        = optional(string, "ubuntu")<br/>      password        = optional(string, null)<br/>      groups          = optional(list(string), ["sudo"])<br/>      shell           = optional(string, "/bin/bash")<br/>      sudoers         = optional(string, "ALL=(ALL) NOPASSWD:ALL")<br/>      ssh_import_ids  = optional(list(string), [])<br/>      authorized_keys = optional(list(string), [])<br/>    })), [{}])<br/><br/>    network_data = optional(list(object({<br/>      interface_name = optional(string, "eth0")<br/>      addresses      = optional(list(string), [])<br/>      dhcp4          = optional(bool, null)<br/>      dhcp6          = optional(bool, false)<br/>      default_route  = optional(string, null)<br/>      routes = optional(list(object({<br/>        to  = string<br/>        via = string<br/>      })), [])<br/>      dns_servers = optional(list(string), [])<br/>      dns_domains = optional(list(string), [])<br/>      mac_prefix  = optional(list(number), [2])<br/>    })), [{}])<br/><br/>    packages = optional(list(string), [])<br/>  })</pre> | n/a | yes |
 | <a name="input_disks"></a> [disks](#input\_disks) | Disk specifications.<br/><br/>Specify only the disk interface type: scsi, sata, or virtio.<br/>Do not include an index such as scsi0; indexes are assigned automatically.<br/><br/>The first disk is the boot disk. Its import\_from and file\_id values fall<br/>back to the matching cloud\_image value. Exactly one of file\_id,<br/>import\_from, or path\_in\_datastore must resolve for that disk.<br/><br/>At least one disk is required. Each entry defaults to the local-lvm<br/>datastore, scsi interface, and raw format; disk size is provider-defined<br/>when omitted. | <pre>list(object({<br/>    aio               = optional(string)<br/>    backup            = optional(bool)<br/>    cache             = optional(string)<br/>    datastore_id      = optional(string, "local-lvm")<br/>    discard           = optional(string)<br/>    file_format       = optional(string, "raw")<br/>    file_id           = optional(string)<br/>    import_from       = optional(string)<br/>    interface         = optional(string, "scsi")<br/>    iothread          = optional(bool)<br/>    path_in_datastore = optional(string)<br/>    queues            = optional(number)<br/>    replicate         = optional(bool)<br/>    serial            = optional(string)<br/>    size              = optional(number)<br/>    ssd               = optional(bool)<br/>    speed = optional(object({<br/>      iops_read            = optional(number)<br/>      iops_read_burstable  = optional(number)<br/>      iops_write           = optional(number)<br/>      iops_write_burstable = optional(number)<br/>      read                 = optional(number)<br/>      read_burstable       = optional(number)<br/>      write                = optional(number)<br/>      write_burstable      = optional(number)<br/>    }))<br/>  }))</pre> | n/a | yes |
 | <a name="input_name"></a> [name](#input\_name) | The name of the VM within Proxmox | `string` | n/a | yes |
 | <a name="input_node_name"></a> [node\_name](#input\_node\_name) | Proxmox node to create the VM on | `string` | n/a | yes |
@@ -394,6 +449,7 @@ All module outputs are marked sensitive to reduce accidental display. `terraform
 | <a name="output_node_name"></a> [node\_name](#output\_node\_name) | The Proxmox VE node name where the VM exists |
 | <a name="output_proxmox_virtual_environment_vm"></a> [proxmox\_virtual\_environment\_vm](#output\_proxmox\_virtual\_environment\_vm) | The Proxmox VE VM resource |
 | <a name="output_proxmox_virtual_environment_vm_ipv4_addresses"></a> [proxmox\_virtual\_environment\_vm\_ipv4\_addresses](#output\_proxmox\_virtual\_environment\_vm\_ipv4\_addresses) | The IPv4 addresses of the VM |
+| <a name="output_proxmox_virtual_environment_vm_ipv6_addresses"></a> [proxmox\_virtual\_environment\_vm\_ipv6\_addresses](#output\_proxmox\_virtual\_environment\_vm\_ipv6\_addresses) | The IPv6 addresses of the VM |
 | <a name="output_proxmox_virtual_environment_vm_mac_addresses"></a> [proxmox\_virtual\_environment\_vm\_mac\_addresses](#output\_proxmox\_virtual\_environment\_vm\_mac\_addresses) | The MAC addresses of the VM |
 | <a name="output_proxmox_virtual_environment_vm_network_interface_names"></a> [proxmox\_virtual\_environment\_vm\_network\_interface\_names](#output\_proxmox\_virtual\_environment\_vm\_network\_interface\_names) | The network interface names of the VM |
 | <a name="output_user_data"></a> [user\_data](#output\_user\_data) | The user data used for cloud-init |
@@ -409,6 +465,7 @@ terraform fmt -check -recursive -diff
 tflint --format=compact --no-color
 terraform init -backend=false -input=false
 terraform validate
+terraform test
 bash -n tests/template-validation/validate.sh
 shellcheck tests/template-validation/validate.sh
 tests/template-validation/validate.sh
@@ -426,5 +483,4 @@ Issues and pull requests are welcome. Include any relavent information such as a
 ## Future work
 
 - Fully test/document cloning from a template instead of making a new VM from a cloud image
-- Fully test/document/fix ipv6 networking, although in the current state it should work more or less.  
 - Come up with a better way to refer to disk images that doesnt take away any features (like ability to use compressed images) or make assumptions that could be wrong.

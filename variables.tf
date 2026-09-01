@@ -282,13 +282,53 @@ variable "cloud_init" {
       dhcp4          = optional(bool, null)
       dhcp6          = optional(bool, false)
       default_route  = optional(string, null)
-      dns_servers    = optional(list(string), [])
-      dns_domains    = optional(list(string), [])
-      mac_prefix     = optional(list(number), [2])
+      routes = optional(list(object({
+        to  = string
+        via = string
+      })), [])
+      dns_servers = optional(list(string), [])
+      dns_domains = optional(list(string), [])
+      mac_prefix  = optional(list(number), [2])
     })), [{}])
 
     packages = optional(list(string), [])
   })
+
+  validation {
+    condition = alltrue(flatten([
+      for network in var.cloud_init.network_data : [
+        for address in network.addresses : can(cidrhost(address, 0))
+      ]
+    ]))
+
+    error_message = "cloud_init.network_data addresses must use valid IPv4 or IPv6 CIDR notation."
+  }
+
+  validation {
+    condition = alltrue([
+      for network in var.cloud_init.network_data :
+      network.default_route == null ? true : can(cidrhost(
+        "${network.default_route}/${strcontains(network.default_route, ":") ? 128 : 32}",
+        0,
+      ))
+    ])
+
+    error_message = "cloud_init.network_data default_route values must be valid IPv4 or IPv6 addresses without a CIDR prefix."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for network in var.cloud_init.network_data : [
+        for route in network.routes :
+        can(cidrhost(route.to, 0)) &&
+        can(cidrhost("${route.via}/${strcontains(route.via, ":") ? 128 : 32}", 0)) &&
+        strcontains(route.to, ":") == strcontains(route.via, ":")
+      ]
+    ]))
+
+    error_message = "cloud_init.network_data routes must use a valid CIDR destination and a same-family IPv4 or IPv6 gateway."
+  }
+
   nullable = false
 }
 

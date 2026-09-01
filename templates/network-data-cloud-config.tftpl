@@ -9,10 +9,16 @@ network:
 %{ if length(data.addresses) > 0 ~}
       addresses: ${jsonencode(data.addresses)}
 %{ endif ~}
-%{ if data.default_route != null ~}
+%{ if data.default_route != null || length(data.routes) > 0 ~}
       routes:
+%{ if data.default_route != null ~}
         - to: default
           via: ${jsonencode(data.default_route)}
+%{ endif ~}
+%{ for route in data.routes ~}
+        - to: ${jsonencode(route.to)}
+          via: ${jsonencode(route.via)}
+%{ endfor ~}
 %{ endif ~}
       dhcp4: ${jsonencode(coalesce(data.dhcp4, length(data.addresses) == 0))}
       dhcp6: ${jsonencode(data.dhcp6)}

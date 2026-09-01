@@ -61,6 +61,7 @@ jobs:
             terraform_validate:
               - '*.tf'
               - '*.tf.json'
+              - 'tests/*.tftest.hcl'
               - '.github/workflows/_tf-lint.yml'
             user_data_template:
               - 'main.tf'
@@ -122,6 +123,10 @@ jobs:
       - name: Validate Terraform
         if: needs.changes.outputs.terraform_validate == 'true'
         run: terraform validate -no-color
+
+      - name: Run Terraform tests
+        if: needs.changes.outputs.terraform_validate == 'true'
+        run: terraform test -no-color
 
   templates:
     name: Cloud-init template checks
