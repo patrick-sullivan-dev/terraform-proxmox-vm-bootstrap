@@ -527,5 +527,4 @@ Issues and pull requests are welcome. Include any relavent information such as a
 
 ## Future work
 
-- Run provider-backed smoke tests for full, linked, and cross-node cloning.
 - Come up with a better way to refer to disk images that doesnt take away any features (like ability to use compressed images) or make assumptions that could be wrong.
