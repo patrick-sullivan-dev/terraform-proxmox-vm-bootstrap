@@ -440,17 +440,19 @@ locals {
   ])
 }
 
-resource "local_file" "rendered_network_config_debug" {
+resource "local_sensitive_file" "rendered_network_config_debug" {
   count = var.debug_files ? 1 : 0
 
   content = templatefile("${path.module}/templates/network-data-cloud-config.tftpl", {
     network_data = local.network_data
   })
 
-  filename = "${path.module}/debug-${var.name}-network-cloud-config.yaml"
+  filename             = "${coalesce(var.debug_directory, path.root)}/debug-${var.vm_id}-network-cloud-config.yaml"
+  file_permission      = "0600"
+  directory_permission = "0700"
 }
 
-resource "local_file" "rendered_user_config_debug" {
+resource "local_sensitive_file" "rendered_user_config_debug" {
   count = var.debug_files ? 1 : 0
 
   content = templatefile("${path.module}/templates/user-data-cloud-config.tftpl", {
@@ -460,5 +462,7 @@ resource "local_file" "rendered_user_config_debug" {
     user_data = var.cloud_init.user_data
   })
 
-  filename = "${path.module}/debug-${var.name}-user-cloud-config.yaml"
+  filename             = "${coalesce(var.debug_directory, path.root)}/debug-${var.vm_id}-user-cloud-config.yaml"
+  file_permission      = "0600"
+  directory_permission = "0700"
 }
