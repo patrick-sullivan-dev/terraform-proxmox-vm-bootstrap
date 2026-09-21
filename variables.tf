@@ -677,8 +677,19 @@ variable "watchdog" {
 # Misc
 # ===================================================
 variable "debug_files" {
-  description = "Whether to output debug files (e.g., cloud-init user-data and network-data files)"
+  description = "Write rendered Cloud-init user-data and network-data to private files for debugging. Files may contain secrets."
   type        = bool
   default     = false
   nullable    = false
+}
+
+variable "debug_directory" {
+  description = "Directory for debug files when debug_files is true. Defaults to the calling root module directory; use an absolute custom path for predictable placement."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.debug_directory == null ? true : trimspace(var.debug_directory) != ""
+    error_message = "debug_directory must be a non-empty path when set."
+  }
 }
