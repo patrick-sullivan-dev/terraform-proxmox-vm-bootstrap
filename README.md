@@ -1,4 +1,4 @@
-# Proxmox Cloud-Init VM
+# Proxmox Cloud-Init
 
 [![Terraform Quality](https://github.com/patrick-sullivan-dev/proxmox-cloudinit-vm/actions/workflows/_tf-lint.yml/badge.svg)](https://github.com/patrick-sullivan-dev/proxmox-cloudinit-vm/actions/workflows/_tf-lint.yml)
 [![Documentation](https://github.com/patrick-sullivan-dev/proxmox-cloudinit-vm/actions/workflows/documentation.yml/badge.svg)](https://github.com/patrick-sullivan-dev/proxmox-cloudinit-vm/actions/workflows/documentation.yml)
