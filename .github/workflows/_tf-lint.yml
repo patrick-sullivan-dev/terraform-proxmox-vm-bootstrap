@@ -61,6 +61,7 @@ jobs:
             terraform_validate:
               - '*.tf'
               - '*.tf.json'
+              - 'examples/**/*.tf'
               - 'tests/*.tftest.hcl'
               - '.github/workflows/_tf-lint.yml'
             user_data_template:
@@ -127,6 +128,17 @@ jobs:
       - name: Run Terraform tests
         if: needs.changes.outputs.terraform_validate == 'true'
         run: terraform test -no-color
+
+      - name: Validate Registry examples
+        if: needs.changes.outputs.terraform_validate == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for example in examples/*; do
+            [[ -d "$example" ]] || continue
+            terraform -chdir="$example" init -backend=false -input=false -no-color
+            terraform -chdir="$example" validate -no-color
+          done
 
   templates:
     name: Cloud-init template checks
