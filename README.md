@@ -1,11 +1,11 @@
-# Proxmox vm-bootstrap
+# Proxmox VM Bootstrap
 
-[![Terraform Quality](https://github.com/patrick-sullivan-dev/proxmox-cloudinit-vm/actions/workflows/_tf-lint.yml/badge.svg)](https://github.com/patrick-sullivan-dev/proxmox-cloudinit-vm/actions/workflows/_tf-lint.yml)
-[![Documentation](https://github.com/patrick-sullivan-dev/proxmox-cloudinit-vm/actions/workflows/documentation.yml/badge.svg)](https://github.com/patrick-sullivan-dev/proxmox-cloudinit-vm/actions/workflows/documentation.yml)
+[![Terraform Quality](https://github.com/patrick-sullivan-dev/terraform-proxmox-vm-bootstrap/actions/workflows/_tf-lint.yml/badge.svg)](https://github.com/patrick-sullivan-dev/terraform-proxmox-vm-bootstrap/actions/workflows/_tf-lint.yml)
+[![Documentation](https://github.com/patrick-sullivan-dev/terraform-proxmox-vm-bootstrap/actions/workflows/documentation.yml/badge.svg)](https://github.com/patrick-sullivan-dev/terraform-proxmox-vm-bootstrap/actions/workflows/documentation.yml)
 
-A Terraform module for bootstrapping Proxmox VE virtual machines from cloud images or existing VMs and templates. Cloud-init configuration is rendered from module variables.
+A Terraform module for bootstrapping Proxmox VE virtual machines from cloud images or existing VMs and templates. Cloud-init configuration is rendered from module variables. [Install it from the Terraform Registry](https://registry.terraform.io/modules/patrick-sullivan-dev/vm-bootstrap/proxmox/latest).
 
-The goal is to end up with a fully bootstrapped VM thats ready for provisioning by some other tool like Ansible. No need to manage Cloud-init configuration separately.
+The goal is a VM ready for provisioning by a tool such as Ansible, without managing Cloud-init files separately.
 
 ## Features
 
@@ -14,14 +14,16 @@ The goal is to end up with a fully bootstrapped VM thats ready for provisioning 
 - Additional package installation, with package updates and upgrades during the initial boot.
 - DHCPv4, DHCPv6, or static addressing, including multiple addresses per interface.
 - IPv4 and IPv6 routes, DNS servers, and DNS search domains.
-- Multiple network interfaces with indiviual configuration and provided or generated MAC addresses.
+- Multiple network interfaces with individual configuration and provided or generated MAC addresses.
 - Automatic installation and startup of the QEMU guest agent.
 - Full or linked cloning from an existing VM or template.
-- All bgp/proxmox provider variables are exposed.
+- Common `bpg/proxmox` VM settings are exposed as module inputs.
 
-Defaults are opinionated for a modern Linux guest: Q35, OVMF/UEFI, two CPU cores, 2GB of memory, 25GB disk space, DHCPv4, VirtIO networking on `vmbr0`, and an enabled QEMU guest agent.
+Defaults target an Ubuntu cloud image: Q35, OVMF/UEFI, two CPU cores, 2 GB of memory, DHCPv4, VirtIO networking on `vmbr0`, and an enabled QEMU guest agent. Image mode requires a boot disk entry; the example below sets its size to 25 GB.
 
 ## Quick start
+
+### 1. Prepare Proxmox
 
 > [!IMPORTANT]
 >
@@ -77,7 +79,8 @@ resource "proxmox_download_file" "ubuntu" {
 }
 
 module "vm" {
-  source = "git::https://github.com/patrick-sullivan-dev/proxmox-cloudinit-vm.git"
+  source  = "patrick-sullivan-dev/vm-bootstrap/proxmox"
+  version = "~> 0.1.1"
 
   vm_id     = 200
   name      = "ubuntu-demo"
@@ -131,7 +134,7 @@ output "vm_ipv4_addresses" {
 }
 ```
 
-Outside of testing, you should pin `source` to a release tag or full commit SHA before using the module. New commits/releases may contain breaking changes 
+Use a tested Registry version in each caller. Update `version` deliberately when adopting a new module release.
 
 ### 4. Apply and connect
 
@@ -143,9 +146,26 @@ terraform output -json vm_ipv4_addresses
 ssh ubuntu@<guest-ip>
 ```
 
-The first boot can take several minutes while Cloud-init updates packages and installs the QEMU guest agent. Check the Proxmox console or run `cloud-init status --wait` inside the guest if SSH is not available yet. For me with a SATA SSD and 1gig networking, it takes about 2min for Terraform to download the image and set up the VM completetly. 
+The first boot can take several minutes while Cloud-init updates packages and installs the QEMU guest agent. Check the Proxmox console or run `cloud-init status --wait` inside the guest if SSH is not available yet. Download and first boot time depend on storage, networking, and package mirrors.
+
+## Move an existing caller to the Registry
+
+Replace a Git `source` with the Registry address and add a version constraint:
+
+```hcl
+module "vm" {
+  source  = "patrick-sullivan-dev/vm-bootstrap/proxmox"
+  version = "~> 0.1.1"
+
+  # Keep the existing module inputs here.
+}
+```
+
+Keep the module block name the same, then run `terraform init` and review `terraform plan` before applying. If you previously enabled `debug_files`, the local debug resources will be replaced: files now go to the caller's root directory or `debug_directory` and use private permissions.
 
 ## Usage examples
+
+Complete configurations are available in the Registry: [cloud image](https://registry.terraform.io/modules/patrick-sullivan-dev/vm-bootstrap/proxmox/latest/examples/cloud-image) and [clone](https://registry.terraform.io/modules/patrick-sullivan-dev/vm-bootstrap/proxmox/latest/examples/clone). Both use a versioned Registry source and accept the Proxmox node and SSH public key as inputs.
 
 ### Use an existing cloud image
 
@@ -174,7 +194,8 @@ Set `clone.vm_id` to the source VM or template ID and omit `disks` and
 
 ```hcl
 module "vm" {
-  source = "git::https://github.com/patrick-sullivan-dev/proxmox-cloudinit-vm.git"
+  source  = "patrick-sullivan-dev/vm-bootstrap/proxmox"
+  version = "~> 0.1.1"
 
   vm_id     = 201
   name      = "ubuntu-clone"
@@ -202,8 +223,7 @@ Clone mode leaves inherited disk, EFI, and TPM devices alone, so `disks` and
 `cloud_image` must remain empty and `system.tpm_state` must remain null.
 `system.efi_disk` is ignored. CPU, memory, network, machine, and other ordinary
 VM settings can override the source, but `system.bios` and `system.machine`
-must remain compatible with it. See [`examples/clone`](examples/clone) for a
-complete configuration.
+must remain compatible with it. See the [clone example](https://registry.terraform.io/modules/patrick-sullivan-dev/vm-bootstrap/proxmox/latest/examples/clone) for a complete configuration.
 
 The no-credentials Terraform tests cover clone wiring and conflicts. Full,
 linked, and cross-node cloning have not yet been exercised against a live
@@ -360,13 +380,13 @@ The rendered user data always enables package updates and upgrades and installs 
 | Guest agent | Enabled by default. Cloud-init installs and starts it; reported IP outputs may remain empty until first-boot provisioning finishes. |
 | Guest access | The default `ubuntu` user has no password or authorized key. Supply `authorized_keys`, `ssh_import_ids`, or a password hash before relying on guest access. |
 | Destruction | By default, unreferenced disks and backup configuration are purged. Review `delete_unreferenced_disks_on_destroy`, `purge_on_destroy`, `protection`, and `stop_on_destroy` for critical workloads. |
-| Debug files | Setting `debug_files = true` writes rendered Cloud-init YAML beside the module. Those files can contain secrets and are ignored by this repository's `.gitignore`. |
+| Debug files | `debug_files = true` writes rendered Cloud-init YAML to `debug_directory`, or to the calling root module directory when omitted. Use an absolute path for a custom directory. Files are named with `vm_id` and created with mode `0600`. They can contain secrets; add `debug-*-cloud-config.yaml` to the caller's `.gitignore` and remove the files after use. |
 
 ## Troubleshooting
 
 ### View Cloud-init output
 
-The module automatically adds a socket serial device to the VM. This allows you to see all of the boot logs and Cloud-init logs that are usally hidden from the standard noVNC console. To view the serial output on the Proxmox web UI, use the xterm.js console by selecting it from the `console` dropdown in the top right, or run the command: `qm terminal VM_ID` in the shell of the Proxmox node. 
+The module adds a socket serial device by default. This lets you see boot and Cloud-init logs that are usually hidden from the standard noVNC console. To view the serial output on the Proxmox web UI, use the xterm.js console by selecting it from the `console` dropdown in the top right, or run the command: `qm terminal VM_ID` in the shell of the Proxmox node.
 
 ### Snippet upload fails over SSH
 
@@ -391,7 +411,7 @@ Cloud-init content is stored in Terraform state and in the Proxmox snippets data
 - Use an encrypted remote state backend.
 - Keep API tokens, SSH private keys, and passwords out of `.tf` and `.tfvars` files committed to version control.
 - Prefer SSH public keys over passwords.
-- Restrict access to the snippets datastore and remove generated debug files after use.
+- Restrict access to the snippets datastore and remove generated debug files after use. Add `debug-*-cloud-config.yaml` to the caller's `.gitignore` if you enable them.
 - Review a destroy plan carefully because the module's disk and backup purge options default to `true`.
 
 All module outputs are marked sensitive to reduce accidental display. `terraform output -json` or `terraform output -raw` still reveals requested values to an authorized operator.
@@ -420,8 +440,8 @@ All module outputs are marked sensitive to reduce accidental display. `terraform
 
 | Name | Type |
 |------|------|
-| [local_file.rendered_network_config_debug](https://registry.terraform.io/providers/hashicorp/local/latest/docs/resources/file) | resource |
-| [local_file.rendered_user_config_debug](https://registry.terraform.io/providers/hashicorp/local/latest/docs/resources/file) | resource |
+| [local_sensitive_file.rendered_network_config_debug](https://registry.terraform.io/providers/hashicorp/local/latest/docs/resources/sensitive_file) | resource |
+| [local_sensitive_file.rendered_user_config_debug](https://registry.terraform.io/providers/hashicorp/local/latest/docs/resources/sensitive_file) | resource |
 | [macaddress_macaddress.this](https://registry.terraform.io/providers/ivoronin/macaddress/latest/docs/resources/macaddress) | resource |
 | [proxmox_virtual_environment_file.network_data_cloud_config](https://registry.terraform.io/providers/bpg/proxmox/latest/docs/resources/virtual_environment_file) | resource |
 | [proxmox_virtual_environment_file.user_data_cloud_config](https://registry.terraform.io/providers/bpg/proxmox/latest/docs/resources/virtual_environment_file) | resource |
@@ -444,7 +464,8 @@ All module outputs are marked sensitive to reduce accidental display. `terraform
 | <a name="input_clone"></a> [clone](#input\_clone) | Configuration for cloning an existing VM or template.<br/><br/>vm\_id identifies the source and must differ from the target VM ID. full<br/>defaults to true. Clone mode requires empty disks and cloud\_image values;<br/>inherited disk, EFI, and TPM devices are not managed by the module. | <pre>object({<br/>    vm_id        = number<br/>    node_name    = optional(string)<br/>    datastore_id = optional(string)<br/>    full         = optional(bool, true)<br/>    retries      = optional(number)<br/>  })</pre> | `null` | no |
 | <a name="input_cloud_image"></a> [cloud\_image](#input\_cloud\_image) | Cloud image used to initialize the VM.<br/><br/>Provide either import\_from or file\_id using a Proxmox file identifier.<br/><br/>This object may be omitted only when the first disks entry supplies its<br/>own image source. Use one of the following; prefer import\_from unless<br/>using an ISO or compressed image.<br/>import\_from: "<datastore\_id>:import/<file\_name>"<br/>file\_id: "<datastore\_id>:<content\_type>/<file\_name>"<br/><br/>A proxmox\_download\_file resource id can also be used instead.<br/><br/>Leave this object empty in clone mode. | <pre>object({<br/>    import_from = optional(string)<br/>    file_id     = optional(string)<br/>  })</pre> | `{}` | no |
 | <a name="input_cpu"></a> [cpu](#input\_cpu) | CPU configuration, defaults to 2 x86-64-v2-AES cores | <pre>object({<br/>    architecture = optional(string)<br/>    cores        = optional(number, 2)<br/>    flags        = optional(list(string))<br/>    hotplugged   = optional(number)<br/>    limit        = optional(number)<br/>    numa         = optional(bool)<br/>    sockets      = optional(number)<br/>    type         = optional(string, "x86-64-v2-AES")<br/>    units        = optional(number)<br/>    affinity     = optional(string)<br/>  })</pre> | `{}` | no |
-| <a name="input_debug_files"></a> [debug\_files](#input\_debug\_files) | Whether to output debug files (e.g., cloud-init user-data and network-data files) | `bool` | `false` | no |
+| <a name="input_debug_directory"></a> [debug\_directory](#input\_debug\_directory) | Directory for debug files when debug\_files is true. Defaults to the calling root module directory; use an absolute custom path for predictable placement. | `string` | `null` | no |
+| <a name="input_debug_files"></a> [debug\_files](#input\_debug\_files) | Write rendered Cloud-init user-data and network-data to private files for debugging. Files may contain secrets. | `bool` | `false` | no |
 | <a name="input_delete_unreferenced_disks_on_destroy"></a> [delete\_unreferenced\_disks\_on\_destroy](#input\_delete\_unreferenced\_disks\_on\_destroy) | Whether to delete unreferenced disks when the VM is destroyed | `bool` | `true` | no |
 | <a name="input_description"></a> [description](#input\_description) | The description of the VM within Proxmox | `string` | `"Managed by Terraform"` | no |
 | <a name="input_disks"></a> [disks](#input\_disks) | Disk specifications.<br/><br/>Specify only the disk interface type: scsi, sata, or virtio.<br/>Do not include an index such as scsi0; indexes are assigned automatically.<br/><br/>In image mode, the first disk is the boot disk. Its import\_from and file\_id<br/>values fall back to the matching cloud\_image value. Exactly one of file\_id,<br/>import\_from, or path\_in\_datastore must resolve for that disk.<br/><br/>Image mode requires at least one disk; clone mode requires this list to be<br/>empty so inherited disks are not modified. Each entry defaults to the<br/>local-lvm datastore, scsi interface, and raw format; disk size is<br/>provider-defined when omitted. | <pre>list(object({<br/>    aio               = optional(string)<br/>    backup            = optional(bool)<br/>    cache             = optional(string)<br/>    datastore_id      = optional(string, "local-lvm")<br/>    discard           = optional(string)<br/>    file_format       = optional(string, "raw")<br/>    file_id           = optional(string)<br/>    import_from       = optional(string)<br/>    interface         = optional(string, "scsi")<br/>    iothread          = optional(bool)<br/>    path_in_datastore = optional(string)<br/>    queues            = optional(number)<br/>    replicate         = optional(bool)<br/>    serial            = optional(string)<br/>    size              = optional(number)<br/>    ssd               = optional(bool)<br/>    speed = optional(object({<br/>      iops_read            = optional(number)<br/>      iops_read_burstable  = optional(number)<br/>      iops_write           = optional(number)<br/>      iops_write_burstable = optional(number)<br/>      read                 = optional(number)<br/>      read_burstable       = optional(number)<br/>      write                = optional(number)<br/>      write_burstable      = optional(number)<br/>    }))<br/>  }))</pre> | `[]` | no |
@@ -523,7 +544,9 @@ The `Module reference` section is controlled by `.terraform-docs.yml`, edit Terr
 
 ## Contributing
 
-Issues and pull requests are welcome. Include any relavent information such as a sanitized reproduction, Terraform and provider versions, the Proxmox VE version, and the cloud image used.
+Issues and pull requests are welcome. Include any relevant information such as a sanitized reproduction, Terraform and provider versions, the Proxmox VE version, and the cloud image used.
+
+This project is licensed under the [MIT License](https://github.com/patrick-sullivan-dev/terraform-proxmox-vm-bootstrap/blob/main/LICENSE).
 
 ## Future work
 
