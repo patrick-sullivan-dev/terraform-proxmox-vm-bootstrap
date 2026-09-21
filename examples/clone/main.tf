@@ -32,7 +32,8 @@ variable "ssh_public_key" {
 }
 
 module "vm" {
-  source = "../.."
+  source  = "patrick-sullivan-dev/vm-bootstrap/proxmox"
+  version = "~> 0.1.1"
 
   vm_id     = var.target_vm_id
   name      = "ubuntu-clone"
