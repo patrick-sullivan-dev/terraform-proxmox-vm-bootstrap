@@ -4,6 +4,12 @@ output "proxmox_virtual_environment_vm_ipv4_addresses" {
   sensitive   = true
 }
 
+output "proxmox_virtual_environment_vm_ipv6_addresses" {
+  description = "The IPv6 addresses of the VM"
+  value       = proxmox_virtual_environment_vm.this.ipv6_addresses
+  sensitive   = true
+}
+
 output "proxmox_virtual_environment_vm_mac_addresses" {
   description = "The MAC addresses of the VM"
   value       = proxmox_virtual_environment_vm.this.mac_addresses

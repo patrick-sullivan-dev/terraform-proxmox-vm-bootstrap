@@ -42,7 +42,7 @@ jobs:
       - name: Classify changed paths
         id: paths
         if: github.event_name != 'workflow_dispatch'
-        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           base: ${{ github.ref }}
           filters: |
@@ -61,6 +61,8 @@ jobs:
             terraform_validate:
               - '*.tf'
               - '*.tf.json'
+              - 'examples/**/*.tf'
+              - 'tests/*.tftest.hcl'
               - '.github/workflows/_tf-lint.yml'
             user_data_template:
               - 'main.tf'
@@ -122,6 +124,21 @@ jobs:
       - name: Validate Terraform
         if: needs.changes.outputs.terraform_validate == 'true'
         run: terraform validate -no-color
+
+      - name: Run Terraform tests
+        if: needs.changes.outputs.terraform_validate == 'true'
+        run: terraform test -no-color
+
+      - name: Validate Registry examples
+        if: needs.changes.outputs.terraform_validate == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for example in examples/*; do
+            [[ -d "$example" ]] || continue
+            terraform -chdir="$example" init -backend=false -input=false -no-color
+            terraform -chdir="$example" validate -no-color
+          done
 
   templates:
     name: Cloud-init template checks

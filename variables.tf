@@ -44,8 +44,10 @@ variable "system" {
   description = <<-EOT
     System configuration
 
-    EFI disk automatically created when bios is set to "ovmf". 
-    datastore_id for EFI and TPM state default to local-lvm.
+    In image mode, an EFI disk is automatically created when bios is "ovmf";
+    datastore_id for EFI and TPM state defaults to local-lvm. Clone mode
+    inherits those storage devices, ignores efi_disk, and requires tpm_state
+    to remain null. Keep bios and machine compatible with the source VM.
 
     Defaults to q35 / ovmf / l26 with a 4m EFI disk and no TPM.
   EOT
@@ -77,7 +79,7 @@ variable "cpu" {
   description = "CPU configuration, defaults to 2 x86-64-v2-AES cores"
 
   type = object({
-    architecture = optional(string, "x86_64")
+    architecture = optional(string)
     cores        = optional(number, 2)
     flags        = optional(list(string))
     hotplugged   = optional(number)
@@ -116,10 +118,14 @@ variable "disks" {
     Specify only the disk interface type: scsi, sata, or virtio.
     Do not include an index such as scsi0; indexes are assigned automatically.
 
-    The import_from and file_id values are populated automatically for the
-    first disk using the cloud_image var.
+    In image mode, the first disk is the boot disk. Its import_from and file_id
+    values fall back to the matching cloud_image value. Exactly one of file_id,
+    import_from, or path_in_datastore must resolve for that disk.
 
-    Defaults to a single 25GB disk on local-lvm with scsi interface and raw format.
+    Image mode requires at least one disk; clone mode requires this list to be
+    empty so inherited disks are not modified. Each entry defaults to the
+    local-lvm datastore, scsi interface, and raw format; disk size is
+    provider-defined when omitted.
   EOT
 
   type = list(object({
@@ -152,15 +158,11 @@ variable "disks" {
   }))
 
   validation {
-    condition     = length(var.disks) > 0
-    error_message = "At least one disk must be configured."
-  }
-
-  validation {
     condition     = alltrue([for disk in var.disks : contains(["scsi", "sata", "virtio"], disk.interface)])
     error_message = "Interface must be one of scsi, sata, virtio. Do not append index."
   }
 
+  default  = []
   nullable = false
 }
 
@@ -170,11 +172,15 @@ variable "cloud_image" {
 
     Provide either import_from or file_id using a Proxmox file identifier.
 
-    Use one of the following, prefer import_from unless using an iso or compressed image.
+    This object may be omitted only when the first disks entry supplies its
+    own image source. Use one of the following; prefer import_from unless
+    using an ISO or compressed image.
     import_from: "<datastore_id>:import/<file_name>"
     file_id: "<datastore_id>:<content_type>/<file_name>"
 
-    A proxmox_virtual_environment_download_file resource id can also be used instead.
+    A proxmox_download_file resource id can also be used instead.
+
+    Leave this object empty in clone mode.
   EOT
 
   type = object({
@@ -204,6 +210,27 @@ variable "cloud_image" {
 
   default  = {}
   nullable = false
+}
+
+variable "clone" {
+  description = <<-EOT
+    Configuration for cloning an existing VM or template.
+
+    vm_id identifies the source and must differ from the target VM ID. full
+    defaults to true. Clone mode requires empty disks and cloud_image values;
+    inherited disk, EFI, and TPM devices are not managed by the module.
+  EOT
+
+  type = object({
+    vm_id        = number
+    node_name    = optional(string)
+    datastore_id = optional(string)
+    full         = optional(bool, true)
+    retries      = optional(number)
+  })
+
+  default  = null
+  nullable = true
 }
 
 variable "scsi_hardware" {
@@ -239,7 +266,16 @@ variable "network_devices" {
 # ===================================================
 
 variable "cloud_init" {
-  description = "Cloud-init configuration, datastore must allow content type 'snippets' and disk datastore must allow VM images"
+  description = <<-EOT
+    Cloud-init configuration.
+
+    datastore_id must allow the snippets content type. disk_datastore_id must
+    allow VM disk images. user_data and network_data default to one entry each;
+    network_data must contain the same number of entries as network_devices.
+
+    User passwords must be Cloud-init-compatible password hashes. Prefer
+    authorized_keys or ssh_import_ids instead.
+  EOT
   type = object({
     datastore_id        = optional(string, "local")
     node_name           = optional(string)
@@ -270,13 +306,53 @@ variable "cloud_init" {
       dhcp4          = optional(bool, null)
       dhcp6          = optional(bool, false)
       default_route  = optional(string, null)
-      dns_servers    = optional(list(string), [])
-      dns_domains    = optional(list(string), [])
-      mac_prefix     = optional(list(number), [2])
+      routes = optional(list(object({
+        to  = string
+        via = string
+      })), [])
+      dns_servers = optional(list(string), [])
+      dns_domains = optional(list(string), [])
+      mac_prefix  = optional(list(number), [2])
     })), [{}])
 
     packages = optional(list(string), [])
   })
+
+  validation {
+    condition = alltrue(flatten([
+      for network in var.cloud_init.network_data : [
+        for address in network.addresses : can(cidrhost(address, 0))
+      ]
+    ]))
+
+    error_message = "cloud_init.network_data addresses must use valid IPv4 or IPv6 CIDR notation."
+  }
+
+  validation {
+    condition = alltrue([
+      for network in var.cloud_init.network_data :
+      network.default_route == null ? true : can(cidrhost(
+        "${network.default_route}/${strcontains(network.default_route, ":") ? 128 : 32}",
+        0,
+      ))
+    ])
+
+    error_message = "cloud_init.network_data default_route values must be valid IPv4 or IPv6 addresses without a CIDR prefix."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for network in var.cloud_init.network_data : [
+        for route in network.routes :
+        can(cidrhost(route.to, 0)) &&
+        can(cidrhost("${route.via}/${strcontains(route.via, ":") ? 128 : 32}", 0)) &&
+        strcontains(route.to, ":") == strcontains(route.via, ":")
+      ]
+    ]))
+
+    error_message = "cloud_init.network_data routes must use a valid CIDR destination and a same-family IPv4 or IPv6 gateway."
+  }
+
   nullable = false
 }
 
@@ -458,7 +534,7 @@ variable "rng" {
 }
 
 variable "serial_device" {
-  description = "Serial device configuration"
+  description = "Serial device configuration, defaults to one socket device, set to null for no serial device"
   type = list(object({
     device = optional(string, "socket")
   }))
@@ -603,8 +679,19 @@ variable "watchdog" {
 # Misc
 # ===================================================
 variable "debug_files" {
-  description = "Whether to output debug files (e.g., cloud-init user-data and network-data files)"
+  description = "Write rendered Cloud-init user-data and network-data to private files for debugging. Files may contain secrets."
   type        = bool
   default     = false
   nullable    = false
+}
+
+variable "debug_directory" {
+  description = "Directory for debug files when debug_files is true. Defaults to the calling root module directory; use an absolute custom path for predictable placement."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.debug_directory == null ? true : trimspace(var.debug_directory) != ""
+    error_message = "debug_directory must be a non-empty path when set."
+  }
 }
