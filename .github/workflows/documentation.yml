@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: documentation-${{ github.event.pull_request.number || github.ref }}
@@ -31,4 +31,4 @@ jobs:
           config-file: .terraform-docs.yml
           output-method: inject
           template: ""
-          fail-on-diff: "true"
+          git-push: "true"
