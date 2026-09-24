@@ -3,7 +3,9 @@ locals {
     minimal = templatefile("${path.module}/../../templates/user-data-cloud-config.tftpl", {
       fqdn     = null
       hostname = null
+      locale   = "en_US.UTF-8"
       packages = []
+      timezone = "America/New_York"
       user_data = [{
         authorized_keys = []
         groups          = ["sudo"]
@@ -18,7 +20,9 @@ locals {
     populated = templatefile("${path.module}/../../templates/user-data-cloud-config.tftpl", {
       fqdn     = "fixture.example.test"
       hostname = "fixture"
+      locale   = "en_GB.UTF-8"
       packages = ["curl", "jq"]
+      timezone = "Europe/London"
       user_data = [{
         authorized_keys = ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureOnly fixture@example.test"]
         groups          = ["sudo", "users"]

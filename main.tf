@@ -7,7 +7,9 @@ resource "proxmox_virtual_environment_file" "user_data_cloud_config" {
     data = templatefile("${path.module}/templates/user-data-cloud-config.tftpl", {
       fqdn      = var.cloud_init.fqdn
       hostname  = var.cloud_init.hostname
+      locale    = var.cloud_init.locale
       packages  = var.cloud_init.packages
+      timezone  = var.cloud_init.timezone
       user_data = var.cloud_init.user_data
     })
     file_name = "${var.vm_id}-user-data-cloud-config.yaml"
@@ -458,7 +460,9 @@ resource "local_sensitive_file" "rendered_user_config_debug" {
   content = templatefile("${path.module}/templates/user-data-cloud-config.tftpl", {
     fqdn      = var.cloud_init.fqdn
     hostname  = var.cloud_init.hostname
+    locale    = var.cloud_init.locale
     packages  = var.cloud_init.packages
+    timezone  = var.cloud_init.timezone
     user_data = var.cloud_init.user_data
   })
 

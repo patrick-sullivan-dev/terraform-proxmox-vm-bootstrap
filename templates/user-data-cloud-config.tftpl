@@ -1,6 +1,6 @@
 #cloud-config
-timezone: America/New_York
-locale: en_US.UTF-8
+timezone: ${jsonencode(timezone)}
+locale: ${jsonencode(locale)}
 
 %{ if hostname != null ~}
 hostname: ${jsonencode(hostname)}

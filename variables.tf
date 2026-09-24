@@ -287,6 +287,8 @@ variable "cloud_init" {
 
     hostname = optional(string, null)
     fqdn     = optional(string, null)
+    locale   = optional(string, "en_US.UTF-8")
+    timezone = optional(string, "America/New_York")
 
     user_data = optional(list(object({
       username        = optional(string, "ubuntu")
